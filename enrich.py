@@ -3,6 +3,7 @@ import time
 import csv
 import requests
 from elasticsearch import Elasticsearch
+from elasticsearch import RequestsHttpConnection
 
 # === Environment Configuration ===
 ES_HOST = os.getenv("ES_HOST", "http://elasticsearch:9200")
@@ -22,7 +23,13 @@ if not API_KEY:
 es = None
 for attempt in range(10):
     try:
-        es = Elasticsearch(ES_HOST)
+        es = Elasticsearch(
+            ES_HOST,
+            verify_certs=False,
+            request_timeout=30,
+            retry_on_timeout=True,
+            max_retries=3
+        )
         if es.ping():
             print(f"[INFO] Connected to Elasticsearch at {ES_HOST}")
             break
