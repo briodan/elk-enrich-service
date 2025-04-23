@@ -4,7 +4,7 @@ import csv
 import requests
 from elasticsearch import Elasticsearch
 
-# === Configuration from ENV ===
+# === Environment Configuration ===
 ES_HOST = os.getenv("ES_HOST", "http://elasticsearch:9200")
 INDEX_PATTERN = os.getenv("INDEX_PATTERN", "logs-*")
 IP_FIELD = os.getenv("IP_FIELD", "dst_ip.keyword")
@@ -13,12 +13,12 @@ OUTPUT_CSV = os.getenv("OUTPUT_CSV", "/data/whois.csv")
 MAX_IPS = int(os.getenv("MAX_IPS", 10000))
 RATE_LIMIT_SECONDS = float(os.getenv("RATE_LIMIT_SECONDS", 1.2))
 
-# === Ensure API key is set ===
+# === Check Required ENV ===
 if not API_KEY:
-    print("[ERROR] API_KEY is missing. Set it in your environment.")
+    print("[ERROR] API_KEY not set in environment.")
     exit(1)
 
-# === Connect to Elasticsearch with retry ===
+# === Connect to Elasticsearch with Retry ===
 es = None
 for attempt in range(10):
     try:
@@ -29,13 +29,13 @@ for attempt in range(10):
         else:
             raise Exception("Ping failed")
     except Exception as e:
-        print(f"[WAIT] Attempt {attempt + 1}/10: Elasticsearch not available yet: {e}")
+        print(f"[WAIT] Attempt {attempt + 1}/10: Elasticsearch not ready: {e}")
         time.sleep(10)
 else:
-    print("[ERROR] Could not connect to Elasticsearch after 10 attempts.")
+    print("[ERROR] Failed to connect to Elasticsearch after 10 attempts.")
     exit(1)
 
-# === Build query to get unique IPs ===
+# === Query IPs from Elasticsearch ===
 query = {
     "size": 0,
     "aggs": {
@@ -52,12 +52,12 @@ try:
     response = es.search(index=INDEX_PATTERN, body=query)
     buckets = response.get("aggregations", {}).get("unique_ips", {}).get("buckets", [])
     ip_list = [bucket["key"] for bucket in buckets]
-    print(f"[INFO] Found {len(ip_list)} unique IPs to enrich.")
+    print(f"[INFO] Retrieved {len(ip_list)} unique IPs.")
 except Exception as e:
-    print(f"[ERROR] Failed to fetch IPs from Elasticsearch: {e}")
+    print(f"[ERROR] Failed to query Elasticsearch: {e}")
     exit(1)
 
-# === Enrich and write to CSV ===
+# === Enrich and Write CSV ===
 try:
     with open(OUTPUT_CSV, "w", newline="") as csvfile:
         writer = csv.writer(csvfile)
@@ -86,7 +86,10 @@ try:
                 else:
                     print(f"[WARN] API error for {ip}: {response.status_code} - {response.text}")
             except Exception as e:
-                print(f"[ERROR] Failed to enrich {ip}: {e}")
+                print(f"[ERROR] Request failed for {ip}: {e}")
             time.sleep(RATE_LIMIT_SECONDS)
 
-    print(f"[INFO
+    print(f"[INFO] Enrichment complete. Data written to {OUTPUT_CSV}")
+except Exception as e:
+    print(f"[ERROR] Failed to write CSV: {e}")
+    exit(1)
