@@ -3,10 +3,11 @@ import time
 import csv
 import requests
 from elasticsearch import Elasticsearch
+from datetime import datetime, timedelta
 
 # === Environment Configuration ===
 ES_HOST = os.getenv("ES_HOST", "http://elasticsearch:9200")
-INDEX_PATTERN = os.getenv("INDEX_PATTERN", "logs-*")
+INDEX_PATTERN = os.getenv("INDEX_PATTERN", "unifi-logs-*")  # <-- FIXED
 IP_FIELD = os.getenv("IP_FIELD", "dst_ip.keyword")
 API_KEY = os.getenv("API_KEY")
 OUTPUT_CSV = os.getenv("OUTPUT_CSV", "/data/whois.csv")
@@ -39,9 +40,20 @@ else:
     print("[ERROR] Failed to connect to Elasticsearch after 10 attempts.")
     exit(1)
 
-# === Query IPs from Elasticsearch ===
+# === Query IPs from Elasticsearch (last 24 hours) ===
+now = datetime.utcnow()
+last_24h = now - timedelta(hours=24)
+
 query = {
     "size": 0,
+    "query": {
+        "range": {
+            "@timestamp": {
+                "gte": last_24h.isoformat(),
+                "lte": now.isoformat()
+            }
+        }
+    },
     "aggs": {
         "unique_ips": {
             "terms": {
