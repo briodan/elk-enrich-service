@@ -1,6 +1,6 @@
 import requests
 
-ES_HOST = "http://10.10.10.215:9200"
+ES_HOST = "http://elasticsearch:9200"
 
 try:
     response = requests.get(ES_HOST, timeout=5)

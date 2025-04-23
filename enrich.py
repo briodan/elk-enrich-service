@@ -30,11 +30,9 @@ for attempt in range(10):
             retry_on_timeout=True,
             max_retries=3
         )
-        if es.ping():
-            print(f"[INFO] Connected to Elasticsearch at {ES_HOST}")
-            break
-        else:
-            raise Exception("Ping failed")
+        health = es.cluster.health()
+        print(f"[INFO] Connected to Elasticsearch at {ES_HOST} — Cluster status: {health['status']}")
+        break
     except Exception as e:
         print(f"[WAIT] Attempt {attempt + 1}/10: Elasticsearch not ready: {e}")
         time.sleep(10)
