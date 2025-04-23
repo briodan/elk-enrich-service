@@ -89,7 +89,7 @@ try:
                         data.get("countryCode", ""),
                         data.get("isp", "")
                     ])
-                    print(f"[INFO] Enriched {ip}")  # ✅ LINE 92
+                    print(f"[INFO] Enriched {ip}")
                 else:
                     print(f"[WARN] API error for {ip}: {response.status_code} - {response.text}")
             except Exception as e:
