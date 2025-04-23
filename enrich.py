@@ -2,12 +2,12 @@ import os
 import time
 import csv
 import requests
+import ipaddress
 from elasticsearch import Elasticsearch
-from datetime import datetime, timedelta
 
 # === Environment Configuration ===
 ES_HOST = os.getenv("ES_HOST", "http://elasticsearch:9200")
-INDEX_PATTERN = os.getenv("INDEX_PATTERN", "unifi-logs-*")  # <-- FIXED
+INDEX_PATTERN = os.getenv("INDEX_PATTERN", "unifi-logs-*")
 IP_FIELD = os.getenv("IP_FIELD", "dst_ip.keyword")
 API_KEY = os.getenv("API_KEY")
 OUTPUT_CSV = os.getenv("OUTPUT_CSV", "/data/whois.csv")
@@ -40,20 +40,9 @@ else:
     print("[ERROR] Failed to connect to Elasticsearch after 10 attempts.")
     exit(1)
 
-# === Query IPs from Elasticsearch (last 24 hours) ===
-now = datetime.utcnow()
-last_24h = now - timedelta(hours=24)
-
+# === Query IPs from Elasticsearch ===
 query = {
     "size": 0,
-    "query": {
-        "range": {
-            "@timestamp": {
-                "gte": last_24h.isoformat(),
-                "lte": now.isoformat()
-            }
-        }
-    },
     "aggs": {
         "unique_ips": {
             "terms": {
@@ -65,7 +54,7 @@ query = {
 }
 
 try:
-    response = es.search(index=INDEX_PATTERN, body=query)
+    response = es.search(index=INDEX_PATTERN, **query)
     buckets = response.get("aggregations", {}).get("unique_ips", {}).get("buckets", [])
     ip_list = [bucket["key"] for bucket in buckets]
     print(f"[INFO] Retrieved {len(ip_list)} unique IPs.")
@@ -81,6 +70,15 @@ try:
 
         for ip in ip_list:
             try:
+                # Skip non-routable/private/reserved IPs
+                try:
+                    if ipaddress.ip_address(ip).is_private or ipaddress.ip_address(ip).is_loopback:
+                        print(f"[SKIP] Skipping private/reserved IP: {ip}")
+                        continue
+                except ValueError:
+                    print(f"[SKIP] Invalid IP format: {ip}")
+                    continue
+
                 response = requests.get(
                     "https://api.abuseipdb.com/api/v2/check",
                     headers={
@@ -90,8 +88,10 @@ try:
                     params={"ipAddress": ip, "maxAgeInDays": 90},
                     timeout=10
                 )
+
                 if response.status_code == 200:
-                    data = response.json()["data"]
+                    data = response.json().get("data", {})
+                    print(f"[DEBUG] {ip}: {data}")
                     writer.writerow([
                         ip,
                         data.get("abuseConfidenceScore", ""),
