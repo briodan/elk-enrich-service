@@ -82,11 +82,11 @@ try:
                         data.get("countryCode", ""),
                         data.get("isp", "")
                     ])
-                    print(f"[INFO] Enriched {ip}")
+                    print(f"[INFO] Enriched {ip}")  # ✅ LINE 92
                 else:
                     print(f"[WARN] API error for {ip}: {response.status_code} - {response.text}")
             except Exception as e:
-                print(f"[ERROR] Request failed for {ip}: {e}")
+                print(f"[ERROR] Failed to enrich {ip}: {e}")
             time.sleep(RATE_LIMIT_SECONDS)
 
     print(f"[INFO] Enrichment complete. Data written to {OUTPUT_CSV}")
