@@ -13,8 +13,8 @@ RUN apt update && apt install -y curl && \
 
 # Add enrichment script and cron definition
 COPY enrich.py .
-COPY crontab.txt .
 COPY es_ping_test.py .
+COPY crontab.txt .
 
 # Set up cron scheduler
 CMD ["/usr/local/bin/supercronic", "/app/crontab.txt"]
