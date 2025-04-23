@@ -2,19 +2,19 @@ import os
 import time
 import csv
 import requests
+import ipaddress
 from datetime import datetime, timedelta
 from elasticsearch import Elasticsearch
 
 # === Environment Configuration ===
 ES_HOST = os.getenv("ES_HOST", "http://elasticsearch:9200")
-INDEX_PATTERN = os.getenv("INDEX_PATTERN", "logs-*")  # should match your index naming, e.g., unifi-logs-*
+INDEX_PATTERN = os.getenv("INDEX_PATTERN", "logs-*")
 IP_FIELD = os.getenv("IP_FIELD", "dest_ip.keyword")
 API_KEY = os.getenv("API_KEY")
 OUTPUT_CSV = os.getenv("OUTPUT_CSV", "/data/whois.csv")
 MAX_IPS = int(os.getenv("MAX_IPS", 10000))
 RATE_LIMIT_SECONDS = float(os.getenv("RATE_LIMIT_SECONDS", 1.2))
 
-# === Validate Configuration ===
 if not API_KEY:
     print("[ERROR] API_KEY not set in environment.")
     exit(1)
@@ -68,15 +68,27 @@ query = {
 try:
     response = es.search(index=INDEX_PATTERN, query=query["query"], aggs=query["aggs"], size=0)
     buckets = response.get("aggregations", {}).get("unique_ips", {}).get("buckets", [])
-    ip_list = [bucket["key"] for bucket in buckets]
-    print(f"[INFO] Retrieved {len(ip_list)} unique IPs.")
+    raw_ip_list = [bucket["key"] for bucket in buckets]
+    print(f"[INFO] Retrieved {len(raw_ip_list)} raw unique IPs.")
 except Exception as e:
     print(f"[ERROR] Failed to query Elasticsearch: {e}")
     exit(1)
 
+# === Filter out private/reserved IPs ===
+ip_list = []
+for ip in raw_ip_list:
+    try:
+        ip_obj = ipaddress.ip_address(ip)
+        if not (ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_reserved or ip_obj.is_multicast or ip_obj.is_link_local):
+            ip_list.append(ip)
+    except ValueError:
+        print(f"[WARN] Invalid IP address skipped: {ip}")
+
+print(f"[INFO] {len(ip_list)} public IPs remaining after filtering.")
+
 # === Enrich and Write CSV ===
 if not ip_list:
-    print("[INFO] No IPs to enrich. Skipping CSV write.")
+    print("[INFO] No public IPs to enrich. Skipping CSV write.")
     exit(0)
 
 try:
