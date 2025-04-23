@@ -17,6 +17,7 @@ MAX_IPS = int(os.getenv("MAX_IPS", 10000))
 RATE_LIMIT_SECONDS = float(os.getenv("RATE_LIMIT_SECONDS", 1.2))
 CACHE_FILE = os.getenv("CACHE_FILE", "/data/ip_cache.json")
 DRY_RUN = os.getenv("DRY_RUN", "false").lower() in ("true", "1", "yes")
+CRON_SCHEDULE = os.getenv("CRON_SCHEDULE", "*/5 * * * *")  # Default to every 5 minutes
 
 # === Validate Required Environment Variables ===
 if not API_KEY and not DRY_RUN:
