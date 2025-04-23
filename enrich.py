@@ -89,10 +89,15 @@ except Exception as e:
 
 # === Load Cache (if exists) ===
 cache = {}
+cache_expiry = timedelta(days=5)
 if os.path.exists(CACHE_FILE):
     try:
         with open(CACHE_FILE, "r") as f:
-            cache = json.load(f)
+            raw_cache = json.load(f)
+            now_ts = datetime.utcnow().timestamp()
+            for ip, record in raw_cache.items():
+                if 'timestamp' in record and now_ts - record['timestamp'] <= cache_expiry.total_seconds():
+                    cache[ip] = record
     except Exception as e:
         print(f"[WARN] Failed to load cache file: {e}")
 
@@ -132,7 +137,8 @@ try:
                     row = {
                         "abuse_score": data.get("abuseConfidenceScore", ""),
                         "country": data.get("countryCode", ""),
-                        "isp": data.get("isp", "")
+                        "isp": data.get("isp", ""),
+                        "timestamp": datetime.utcnow().timestamp()
                     }
                     cache[ip] = row
                     print(f"[INFO] Enriched {ip}")
@@ -141,7 +147,7 @@ try:
                     continue
                 time.sleep(RATE_LIMIT_SECONDS)
 
-            writer.writerow([ip, row["abuse_score"], row["country"], row["isp"]])
+            writer.writerow([ip, row.get("abuse_score", ""), row.get("country", ""), row.get("isp", "")])
 
     # Save updated cache
     try:
