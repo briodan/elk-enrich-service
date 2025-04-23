@@ -3,7 +3,6 @@ import time
 import csv
 import requests
 from elasticsearch import Elasticsearch
-from elasticsearch import RequestsHttpConnection
 
 # === Environment Configuration ===
 ES_HOST = os.getenv("ES_HOST", "http://elasticsearch:9200")
