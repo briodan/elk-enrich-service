@@ -1,1 +1,1 @@
-*/5 * * * * python /app/enrich.py >> /var/log/enrich.log 2>&1
+*/5 * * * * python /app/enrich.py | tee -a /data/enrich.log
