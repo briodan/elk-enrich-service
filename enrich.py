@@ -3,32 +3,27 @@ import time
 import csv
 import json
 import requests
+import ipaddress
+from datetime import datetime, timedelta
 from elasticsearch import Elasticsearch
 
 # === Environment Configuration ===
 ES_HOST = os.getenv("ES_HOST", "http://elasticsearch:9200")
-INDEX_PATTERN = os.getenv("INDEX_PATTERN", "unifi-logs-*")
+INDEX_PATTERN = os.getenv("INDEX_PATTERN", "logs-*")
 IP_FIELD = os.getenv("IP_FIELD", "dest_ip.keyword")
 API_KEY = os.getenv("API_KEY")
 OUTPUT_CSV = os.getenv("OUTPUT_CSV", "/data/whois.csv")
 MAX_IPS = int(os.getenv("MAX_IPS", 10000))
 RATE_LIMIT_SECONDS = float(os.getenv("RATE_LIMIT_SECONDS", 1.2))
-DRY_RUN = os.getenv("DRY_RUN", "false").lower() == "true"
 CACHE_FILE = os.getenv("CACHE_FILE", "/data/ip_cache.json")
+DRY_RUN = os.getenv("DRY_RUN", "false").lower() in ("true", "1", "yes")
 
-# === Load cache ===
-try:
-    with open(CACHE_FILE, "r") as f:
-        cache = json.load(f)
-except FileNotFoundError:
-    cache = {}
-
-# === Check Required ENV ===
+# === Validate Required Environment Variables ===
 if not API_KEY and not DRY_RUN:
-    print("[ERROR] API_KEY not set in environment.")
+    print("[ERROR] API_KEY is required unless DRY_RUN is enabled.")
     exit(1)
 
-# === Connect to Elasticsearch with Retry ===
+# === Elasticsearch Connection with Retry ===
 es = None
 for attempt in range(10):
     try:
@@ -37,7 +32,7 @@ for attempt in range(10):
             verify_certs=False,
             request_timeout=30,
             retry_on_timeout=True,
-            max_retries=3
+            max_retries=3,
         )
         health = es.cluster.health()
         print(f"[INFO] Connected to Elasticsearch at {ES_HOST} — Cluster status: {health['status']}")
@@ -49,13 +44,16 @@ else:
     print("[ERROR] Failed to connect to Elasticsearch after 10 attempts.")
     exit(1)
 
-# === Query IPs from Elasticsearch ===
+# === Build Time-Bound Query (Past 24 Hours) ===
+now = datetime.utcnow()
+since = now - timedelta(hours=24)
 query = {
     "size": 0,
     "query": {
         "range": {
             "@timestamp": {
-                "gte": "now-1d/d"
+                "gte": since.isoformat(),
+                "lte": now.isoformat()
             }
         }
     },
@@ -69,23 +67,36 @@ query = {
     }
 }
 
+# === Fetch Unique IPs ===
 try:
     response = es.search(index=INDEX_PATTERN, body=query)
     buckets = response.get("aggregations", {}).get("unique_ips", {}).get("buckets", [])
-    ip_list = [bucket["key"] for bucket in buckets]
-    print(f"[INFO] Retrieved {len(ip_list)} unique IPs.")
+    raw_ips = [bucket["key"] for bucket in buckets]
+    ip_list = []
+    for ip in raw_ips:
+        try:
+            parsed = ipaddress.ip_address(ip)
+            if not (parsed.is_private or parsed.is_loopback or parsed.is_reserved or parsed.is_link_local):
+                ip_list.append(ip)
+            else:
+                print(f"[SKIP] Skipping private/reserved IP: {ip}")
+        except ValueError:
+            print(f"[WARN] Invalid IP skipped: {ip}")
+    print(f"[INFO] Retrieved {len(ip_list)} public IPs out of {len(raw_ips)} total.")
 except Exception as e:
     print(f"[ERROR] Failed to query Elasticsearch: {e}")
     exit(1)
 
-# === DRY RUN ===
-if DRY_RUN:
-    print("[INFO] DRY_RUN is enabled — skipping enrichment API calls.")
-    for ip in ip_list:
-        print(f"[DRY] Would enrich: {ip}")
-    exit(0)
+# === Load Cache (if exists) ===
+cache = {}
+if os.path.exists(CACHE_FILE):
+    try:
+        with open(CACHE_FILE, "r") as f:
+            cache = json.load(f)
+    except Exception as e:
+        print(f"[WARN] Failed to load cache file: {e}")
 
-# === Enrich and Write CSV ===
+# === Enrich IPs and Write CSV ===
 try:
     with open(OUTPUT_CSV, "w", newline="") as csvfile:
         writer = csv.writer(csvfile)
@@ -93,8 +104,11 @@ try:
 
         for ip in ip_list:
             if ip in cache:
-                print(f"[CACHE] Using cached data for {ip}")
-                data = cache[ip]
+                print(f"[CACHE] Using cached result for {ip}")
+                row = cache[ip]
+            elif DRY_RUN:
+                print(f"[DRY_RUN] Skipping enrichment for {ip}")
+                row = {"abuse_score": "", "country": "", "isp": ""}
             else:
                 try:
                     response = requests.get(
@@ -106,37 +120,37 @@ try:
                         params={"ipAddress": ip, "maxAgeInDays": 90},
                         timeout=10
                     )
-                    if response.status_code == 200:
-                        data = response.json()["data"]
-                        cache[ip] = data
-                    elif response.status_code == 429:
-                        wait = int(response.headers.get("Retry-After", 60))
-                        print(f"[RATE LIMIT] Hit API limit, sleeping for {wait} seconds...")
-                        time.sleep(wait)
+                    if response.status_code == 429:
+                        retry_after = int(response.headers.get("Retry-After", RATE_LIMIT_SECONDS))
+                        print(f"[RATE_LIMIT] Hit limit. Sleeping for {retry_after} seconds...")
+                        time.sleep(retry_after)
                         continue
-                    else:
+                    elif response.status_code != 200:
                         print(f"[WARN] API error for {ip}: {response.status_code} - {response.text}")
                         continue
+                    data = response.json()["data"]
+                    row = {
+                        "abuse_score": data.get("abuseConfidenceScore", ""),
+                        "country": data.get("countryCode", ""),
+                        "isp": data.get("isp", "")
+                    }
+                    cache[ip] = row
+                    print(f"[INFO] Enriched {ip}")
                 except Exception as e:
                     print(f"[ERROR] Failed to enrich {ip}: {e}")
                     continue
-
                 time.sleep(RATE_LIMIT_SECONDS)
 
-            writer.writerow([
-                ip,
-                data.get("abuseConfidenceScore", ""),
-                data.get("countryCode", ""),
-                data.get("isp", "")
-            ])
-            print(f"[INFO] Enriched {ip}")
+            writer.writerow([ip, row["abuse_score"], row["country"], row["isp"]])
+
+    # Save updated cache
+    try:
+        with open(CACHE_FILE, "w") as f:
+            json.dump(cache, f)
+    except Exception as e:
+        print(f"[WARN] Failed to save cache: {e}")
 
     print(f"[INFO] Enrichment complete. Data written to {OUTPUT_CSV}")
-
-    # Save cache
-    with open(CACHE_FILE, "w") as f:
-        json.dump(cache, f)
-
 except Exception as e:
     print(f"[ERROR] Failed to write CSV: {e}")
     exit(1)
