@@ -2,19 +2,19 @@ import os
 import time
 import csv
 import requests
-import ipaddress
+from datetime import datetime, timedelta
 from elasticsearch import Elasticsearch
 
 # === Environment Configuration ===
 ES_HOST = os.getenv("ES_HOST", "http://elasticsearch:9200")
-INDEX_PATTERN = os.getenv("INDEX_PATTERN", "unifi-logs-*")
-IP_FIELD = os.getenv("IP_FIELD", "dst_ip.keyword")
+INDEX_PATTERN = os.getenv("INDEX_PATTERN", "logs-*")  # should match your index naming, e.g., unifi-logs-*
+IP_FIELD = os.getenv("IP_FIELD", "dest_ip.keyword")
 API_KEY = os.getenv("API_KEY")
 OUTPUT_CSV = os.getenv("OUTPUT_CSV", "/data/whois.csv")
 MAX_IPS = int(os.getenv("MAX_IPS", 10000))
 RATE_LIMIT_SECONDS = float(os.getenv("RATE_LIMIT_SECONDS", 1.2))
 
-# === Check Required ENV ===
+# === Validate Configuration ===
 if not API_KEY:
     print("[ERROR] API_KEY not set in environment.")
     exit(1)
@@ -40,9 +40,19 @@ else:
     print("[ERROR] Failed to connect to Elasticsearch after 10 attempts.")
     exit(1)
 
-# === Query IPs from Elasticsearch ===
+# === Build Time-Bound Query (Last 24 Hours) ===
+now = datetime.utcnow()
+start_time = now - timedelta(days=1)
+
 query = {
-    "size": 0,
+    "query": {
+        "range": {
+            "@timestamp": {
+                "gte": start_time.isoformat(),
+                "lte": now.isoformat()
+            }
+        }
+    },
     "aggs": {
         "unique_ips": {
             "terms": {
@@ -50,11 +60,13 @@ query = {
                 "size": MAX_IPS
             }
         }
-    }
+    },
+    "size": 0
 }
 
+# === Query Unique IPs ===
 try:
-    response = es.search(index=INDEX_PATTERN, **query)
+    response = es.search(index=INDEX_PATTERN, query=query["query"], aggs=query["aggs"], size=0)
     buckets = response.get("aggregations", {}).get("unique_ips", {}).get("buckets", [])
     ip_list = [bucket["key"] for bucket in buckets]
     print(f"[INFO] Retrieved {len(ip_list)} unique IPs.")
@@ -63,6 +75,10 @@ except Exception as e:
     exit(1)
 
 # === Enrich and Write CSV ===
+if not ip_list:
+    print("[INFO] No IPs to enrich. Skipping CSV write.")
+    exit(0)
+
 try:
     with open(OUTPUT_CSV, "w", newline="") as csvfile:
         writer = csv.writer(csvfile)
@@ -70,15 +86,6 @@ try:
 
         for ip in ip_list:
             try:
-                # Skip non-routable/private/reserved IPs
-                try:
-                    if ipaddress.ip_address(ip).is_private or ipaddress.ip_address(ip).is_loopback:
-                        print(f"[SKIP] Skipping private/reserved IP: {ip}")
-                        continue
-                except ValueError:
-                    print(f"[SKIP] Invalid IP format: {ip}")
-                    continue
-
                 response = requests.get(
                     "https://api.abuseipdb.com/api/v2/check",
                     headers={
@@ -88,10 +95,8 @@ try:
                     params={"ipAddress": ip, "maxAgeInDays": 90},
                     timeout=10
                 )
-
                 if response.status_code == 200:
                     data = response.json().get("data", {})
-                    print(f"[DEBUG] {ip}: {data}")
                     writer.writerow([
                         ip,
                         data.get("abuseConfidenceScore", ""),
