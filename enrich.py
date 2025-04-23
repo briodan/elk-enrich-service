@@ -71,15 +71,28 @@ try:
         writer = csv.writer(csvfile)
         writer.writerow(["ip", "abuse_score", "country", "isp"])
 
-        for ip in ip_list:
-            try:
-                response = requests.get(
-                    "https://api.abuseipdb.com/api/v2/check",
-                    headers={
-                        "Key": API_KEY,
-                        "Accept": "application/json"
-                    },
-                    params={"ipAddress": ip, "maxAgeInDays": 90},
-                    timeout=10
-                )
-                if response.status_code == 200:
+for ip in ip_list:
+    try:
+        response = requests.get(
+            "https://api.abuseipdb.com/api/v2/check",
+            headers={
+                "Key": API_KEY,
+                "Accept": "application/json"
+            },
+            params={"ipAddress": ip, "maxAgeInDays": 90},
+            timeout=10
+        )
+        if response.status_code == 200:
+            data = response.json()["data"]
+            writer.writerow([
+                ip,
+                data.get("abuseConfidenceScore", ""),
+                data.get("countryCode", ""),
+                data.get("isp", "")
+            ])
+            print(f"[INFO] Enriched {ip}")
+        else:
+            print(f"[WARN] API error for {ip}: {response.status_code} {response.text}")
+    except Exception as e:
+        print(f"[ERROR] Request failed for {ip}: {e}")
+    time.sleep(RATE_LIMIT_SECONDS)
