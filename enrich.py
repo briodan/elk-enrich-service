@@ -102,11 +102,24 @@ if os.path.exists(CACHE_FILE):
     except Exception as e:
         print(f"[WARN] Failed to load cache file: {e}")
 
-# === Enrich IPs and Write CSV ===
+# === Output Files ===
+abuse_score_path = OUTPUT_CSV.replace(".csv", "_abuse_score.csv")
+country_path = OUTPUT_CSV.replace(".csv", "_country.csv")
+org_path = OUTPUT_CSV.replace(".csv", "_org.csv")
+
+# === Enrich and Write All CSVs ===
 try:
-    with open(OUTPUT_CSV, "w", newline="") as csvfile:
-        writer = csv.writer(csvfile)
-        writer.writerow(["ip", "abuse_score", "country", "isp"])
+    with open(OUTPUT_CSV, "w", newline="") as main_csv, \
+         open(abuse_score_path, "w", newline="") as abuse_csv, \
+         open(country_path, "w", newline="") as country_csv, \
+         open(org_path, "w", newline="") as org_csv:
+
+        main_writer = csv.writer(main_csv)
+        abuse_writer = csv.writer(abuse_csv)
+        country_writer = csv.writer(country_csv)
+        org_writer = csv.writer(org_csv)
+
+        main_writer.writerow(["ip", "abuse_score", "country", "isp"])
 
         for ip in ip_list:
             if ip in cache:
@@ -148,7 +161,11 @@ try:
                     continue
                 time.sleep(RATE_LIMIT_SECONDS)
 
-            writer.writerow([ip, row.get("abuse_score", ""), row.get("country", ""), row.get("isp", "")])
+            # Write to all outputs
+            main_writer.writerow([ip, row.get("abuse_score", ""), row.get("country", ""), row.get("isp", "")])
+            abuse_writer.writerow([ip, row.get("abuse_score", "")])
+            country_writer.writerow([ip, row.get("country", "")])
+            org_writer.writerow([ip, row.get("isp", "")])
 
     # Save updated cache
     try:
@@ -159,5 +176,5 @@ try:
 
     print(f"[INFO] Enrichment complete. Data written to {OUTPUT_CSV}")
 except Exception as e:
-    print(f"[ERROR] Failed to write CSV: {e}")
+    print(f"[ERROR] Failed to write CSV files: {e}")
     exit(1)
